@@ -1,0 +1,70 @@
+name:                prolog-interpreter
+version:             0.1.0.0
+github:              "githubuser/prolog-interpreter"
+license:             BSD3
+author:              "Author name here"
+maintainer:          "example@example.com"
+copyright:           "2021 Author name here"
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/githubuser/prolog-interpreter#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+
+ghc-options:
+# - -Wall                    # https://downloads.haskell.org/~ghc/9.0.1/docs/html/users_guide/using-warnings.html
+- -Werror                   # warnings are errors
+- -Wincomplete-patterns     # cover all cases!
+- -Wunused-binds            # use all your bindings
+- -Wunused-matches          # use all your pattern matches!
+- -Wmissing-signatures      # write all your toplevel signatures!
+- -Wname-shadowing          # use different names!
+- -Wincomplete-uni-patterns # warn about incomplete patterns v2
+- -O2                       # Apply every non-dangerous optimisation, even if it means significantly longer compile times.
+- -Widentities              # prevent useing type convertion to the same type (toInteger (5 :: Integer))
+- -Wredundant-constraints   # warn about reduntant constraints (if you add constraints Eq and Ord, where Ord already has Eq)
+
+library:
+  source-dirs: src
+
+executables:
+  prolog-interpreter-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - prolog-interpreter
+    # fixes Warning: Multiple files use the same module name
+    when:
+    - condition: false
+      other-modules: Paths_prolog_interpreter
+
+tests:
+  prolog-interpreter-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - prolog-interpreter
+    # fixes Warning: Multiple files use the same module name
+    when:
+    - condition: false
+      other-modules: Paths_prolog_interpreter
+
