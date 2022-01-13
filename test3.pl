@@ -93,4 +93,16 @@ z(5).
 % infiniteLoopTest :- infiniteLoopTest(0).
 
 % gen(a(d, b, f(Y)), z) :- true, X.
+pp(z).
+gg(X) :- pp(X).
+gg(X) :- gg(X).
 
+nn(ff()).
+
+% true.
+% not(false).
+% false :- not(true).
+
+% dd :- false.
+dd :- false;true.
+z(X) :- X.

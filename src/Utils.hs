@@ -80,6 +80,10 @@ infixl 6 .++
 intersect :: forall a. (Eq a) => [a] -> [a] -> [a]
 intersect l l' = filter (`elem` l') l
 
+uniq :: Eq a => [a] -> [a]
+uniq [] = []
+uniq (x:xs) = x : uniq (filter (/=x) xs)
+
 
 
 

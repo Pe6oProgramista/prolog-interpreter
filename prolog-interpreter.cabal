@@ -26,6 +26,8 @@ source-repository head
 library
   exposed-modules:
       Lib
+      Parser
+      Terms
       Utils
   other-modules:
       Paths_prolog_interpreter

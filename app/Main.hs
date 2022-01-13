@@ -6,6 +6,7 @@ import Utils
 main :: IO ()
 main = do
   putStr "FileName: "
-  -- fileName <- getLine'
-  plReadFile "test3.pl"-- fileName
+  fileName <- getLine'
+  plReadFile fileName
+  -- plReadFile "test3.pl"
 
