@@ -28,7 +28,7 @@ retrieveFileName name
 
 getLine' :: IO String
 getLine' = do
-  hFlush stdout
+  hFlush stdout -- за да не буферира данните
   getLine
 
 (>.>) :: (a -> b) -> (b -> c) -> a -> c
@@ -80,9 +80,12 @@ infixl 6 .++
 intersect :: forall a. (Eq a) => [a] -> [a] -> [a]
 intersect l l' = filter (`elem` l') l
 
-uniq :: Eq a => [a] -> [a]
+uniq :: forall a. Eq a => [a] -> [a]
 uniq [] = []
 uniq (x:xs) = x : uniq (filter (/=x) xs)
+
+first :: forall a b c. (a -> b) -> (a, c) -> (b, c)
+first f (x, y) = (f x, y)
 
 
 

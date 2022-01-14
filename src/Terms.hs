@@ -1,14 +1,19 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE LambdaCase #-}
 module Terms where
 
 import Prelude hiding (head)
 import Prelude (id)
 import Data.Maybe (fromMaybe)
 
-import Utils ( (>.>), uniq )
+import Utils ( (>.>), uniq, getLine', maybeAndThen )
 
 import Debug.Trace (trace)
+import Control.Monad (foldM_, when, unless)
+import System.IO (BufferMode(LineBuffering, NoBuffering), hSetBuffering, stdin)
+import Data.Foldable (asum)
+
 debug :: c -> String -> c
 debug = flip trace
 
@@ -59,13 +64,13 @@ class IsTerm a where
 type Atom = String
 
 newtype Id = Id { idAtom :: Atom }
-  deriving (Show, Eq)
+  deriving (Eq)
 
 newtype Const = Const { constId :: Id }
-  deriving (Show, Eq)
+  deriving (Eq)
 
 newtype Var = Var { varName :: String }
-  deriving (Show, Eq)
+  deriving (Eq)
 
 data AtomicTerm = ConstT Const | IntT Int | FloatT Float
   deriving (Eq)
@@ -76,15 +81,24 @@ data CompoundTerm = CompoundTerm { functor :: Id, args :: [Term] }
 data Term = VarT Var | AtomicT AtomicTerm | CompoundT CompoundTerm --  | PredefT PredefTerm
   deriving (Eq)
 
+instance Show Id where
+  show i = idAtom i
+
+instance Show Const where
+  show c = show $ constId c
+
+instance Show Var where
+  show v = varName v
+
 instance Show AtomicTerm where
-  show (ConstT c) = idAtom $ constId c
+  show (ConstT c) = show c
   show (IntT n) = show n
   show (FloatT x) = show x
 
 instance Show CompoundTerm where
   show ct =
     idAtom (functor ct) ++
-    "(" ++ foldr (\x acc -> show x ++ if null acc then "" else ",") "" (args ct) ++ ")"
+    "(" ++ foldr (\x acc -> show x ++ (if null acc then "" else ",") ++ acc) "" (args ct) ++ ")"
 
 instance Show Term where
   show (VarT var) = varName var
@@ -145,6 +159,23 @@ type Program = [Clause]
 -- BoundVars (any other var is free var)
 type Context = [(Var, Term)]
 
+-- All types that act like a term
+instance IsTerm Const where
+  asTerm c = AtomicT $ ConstT c
+
+instance IsTerm Var where
+  asTerm v = VarT v
+
+instance IsTerm AtomicTerm where
+  asTerm at = AtomicT at
+
+instance IsTerm CompoundTerm where
+  asTerm ct = CompoundT ct
+
+instance IsTerm ClauseHead where
+  asTerm ch = case ch of
+    CompoundHead ct -> asTerm ct
+    ConstHead ident -> asTerm $ Const ident
 
 anonymousVar :: Var
 anonymousVar = Var "_"
@@ -184,7 +215,7 @@ lookupClause ident arity = filter (((ident, arity) ==) . pairIdArity)
 
 extend :: Var -> Term -> Context -> Context
 extend _ (VarT _) ctxt = ctxt
-extend v t ctxt = (v, t) : ctxt
+extend v t ctxt = (v, t) : filter (fst >.> (/= v)) ctxt
 
 -- Extends context for all free vars in term1 with values from term2
 extendTerm :: Term -> Term -> Context -> Maybe Context
@@ -209,18 +240,18 @@ extendTerm (CompoundT ct1) (CompoundT ct2) ctxt = if length (args ct1) == length
 
 -- compare terms (from args: left-queryArg right-databaseArg) and asign left one with the second in the context
 retrieveTerm :: Term -> Term -> Maybe (Context, Bool)
-retrieveTerm (VarT v) t = Just ([(v, freeToAnonymousVars t)], True)
+retrieveTerm (VarT v) t = Just ([(v, t)], True) -- add "freeToAnonymousVars t"
 
 retrieveTerm (AtomicT _) (VarT _) = Just ([], True)
 retrieveTerm (AtomicT at) (AtomicT at') = Just ([], at == at')
-retrieveTerm (AtomicT _) (CompoundT _) = Nothing
+retrieveTerm (AtomicT _) (CompoundT _) = trace "here" Nothing
 
 retrieveTerm (CompoundT _) (VarT _) = Just ([], True)
 retrieveTerm (CompoundT _) (AtomicT _) = Nothing
 retrieveTerm (CompoundT ct) (CompoundT ct') =
   if length (args ct) == length (args ct')
     then let
-        -- not use but onother way to check if hasMultBindings
+        -- not used but another way to check if hasMultBindings (with proof)
         _foldDiffBindings :: Context -> Context -> [(Var, [Term])]
         _foldDiffBindings c c' = foldr foldVarBindings [] $ uniq (c ++ c')
           where
@@ -244,7 +275,7 @@ retrieveTerm (CompoundT ct) (CompoundT ct') =
                 Just (_, False) -> Just ([], False)
                 Just (ctxt', True) -> if hasMultBindings ctxt' accCtxt -- t(X, g(X))  t(a, g(b))
                   then Just ([], False)
-                  else Just (ctxt' ++ accCtxt, True)
+                  else Just (uniq (ctxt' ++ accCtxt), True)
               else Just ([], False)
       in
         foldr retrieveArgs (Just ([], True)) $ zip (args ct) (args ct')
@@ -252,24 +283,12 @@ retrieveTerm (CompoundT ct) (CompoundT ct') =
     else Nothing
 
 
--- All types that act like a term
-instance IsTerm Const where
-  asTerm c = AtomicT $ ConstT c
+swapCtxt :: Maybe (Context, Bool) -> Context -> Maybe (Context, Bool)
+swapCtxt res ctxt = (,) ctxt . snd <$> res
 
-instance IsTerm Var where
-  asTerm v = VarT v
-
-instance IsTerm AtomicTerm where
-  asTerm at = AtomicT at
-
-instance IsTerm CompoundTerm where
-  asTerm ct = CompoundT ct
-
-instance IsTerm ClauseHead where
-  asTerm ch = case ch of
-    CompoundHead ct -> asTerm ct
-    ConstHead ident -> asTerm $ Const ident
-
+unifyCtxt :: Maybe (Context, Bool) -> Context -> Maybe (Context, Bool)
+unifyCtxt Nothing  _ = Nothing
+unifyCtxt (Just (c1, res)) c2 = Just (uniq (c1 ++ c2), res)
 
 instance Callable AtomicTerm where
   call :: Program -> Context -> AtomicTerm -> [Maybe (Context, Bool)]
@@ -280,8 +299,8 @@ instance Callable AtomicTerm where
       where
         appendClauseRes clause acc = case clause of
           Fact _ -> Just (ctxt, True) : acc
-          Rule _ gl -> evalOrQuery prog ctxt gl ++ acc
-          PredefC (PredefClause _ callClause) -> callClause prog ctxt ++ acc
+          Rule _ gl -> map (`swapCtxt` ctxt) (evalOrQuery prog [] gl) ++ acc
+          PredefC (PredefClause _ callClause) -> map (`swapCtxt` ctxt) (callClause prog []) ++ acc -- swaping because this is clause without arguments and we dont want its context
     IntT _ -> [Nothing]
     FloatT _ -> [Nothing]
 
@@ -291,17 +310,24 @@ instance Callable CompoundTerm where
     [] -> [Nothing]
     clauses -> foldr appendClauseRes [] clauses
       where
+        bindedArgs = map (`bindTermVars` ctxt) as
+
         appendClauseRes clause acc = case clause of
           Fact ch -> case asTerm ch of
             CompoundT CompoundTerm {functor = f', args = as'} ->
               let
-                new_ctxt = extendTerm (CompoundT $ CompoundTerm f' as')
-                                      (CompoundT $ CompoundTerm f  as ) ctxt
+                new_ctxt = extendTerm
+                    (CompoundT $ CompoundTerm f' as')
+                    (CompoundT $ CompoundTerm f  bindedArgs) []
+
+                retrieveCurrArgs ctxt' = retrieveTerm
+                    (CompoundT $ CompoundTerm f  bindedArgs)
+                    (CompoundT $ CompoundTerm f' (map (`bindTermVars` ctxt') as'))
               in case new_ctxt of
-                Nothing -> Just ([], False) : acc
-                Just new_ctxt' -> retrieveTerm
-                    (CompoundT $ CompoundTerm f  as )
-                    (CompoundT $ CompoundTerm f' (map (`bindTermVars` new_ctxt') as')) : acc
+                Nothing -> Just (ctxt, False) : acc
+                Just new_ctxt' -> case retrieveCurrArgs new_ctxt' of
+                  Nothing -> Just (ctxt, False) : acc
+                  res -> unifyCtxt res ctxt : acc
 
             -- case for zero arguments CompoundTerm
             AtomicT _ -> Just (ctxt, True) : acc
@@ -314,24 +340,27 @@ instance Callable CompoundTerm where
               let
                 new_ctxt = extendTerm
                     (CompoundT $ CompoundTerm f' as')
-                    (CompoundT $ CompoundTerm f  as ) ctxt
+                    (CompoundT $ CompoundTerm f  bindedArgs) []
 
                 retrieveCurrArgs ctxt' = retrieveTerm
-                    (CompoundT $ CompoundTerm f  as )
+                    (CompoundT $ CompoundTerm f  bindedArgs)
                     (CompoundT $ CompoundTerm f' (map (`bindTermVars` ctxt') as'))
 
                 -- combine the result of body goals and args
+                -- first arg of the function is body Ctxt
                 combineBodyArgs Nothing = Nothing
                 combineBodyArgs (Just (ctxt', res)) =
                   case retrieveCurrArgs ctxt' of
-                    Just (argsCtxt, res') -> Just (argsCtxt, res' && res)
+                    Just (argsCtxt, res') -> if res' && res
+                      then Just (argsCtxt, True)
+                      else Just ([], False)
                     _ -> Nothing
               in case new_ctxt of
-                Nothing -> Just ([], False) : acc
-                Just new_ctxt' -> map combineBodyArgs (evalOrQuery prog new_ctxt' gl) ++ acc
+                Nothing -> Just (ctxt, False) : acc
+                Just new_ctxt' -> map ((`unifyCtxt` ctxt) . combineBodyArgs)  (evalOrQuery prog new_ctxt' gl) ++ acc
 
              -- case for zero arguments CompoundTerm
-            AtomicT _ -> evalOrQuery prog ctxt gl ++ acc
+            AtomicT _ -> map (`swapCtxt` ctxt) (evalOrQuery prog [] gl) ++ acc
 
             _ -> acc -- maybe it will never reach this line (if lookup works properly)
 
@@ -339,13 +368,27 @@ instance Callable CompoundTerm where
             CompoundT CompoundTerm {functor = f', args = as'} ->
               let
                 new_ctxt = extendTerm
-                        (CompoundT $ CompoundTerm f' as')
-                        (CompoundT $ CompoundTerm f  as ) ctxt
+                    (CompoundT $ CompoundTerm f' as')
+                    (CompoundT $ CompoundTerm f  bindedArgs) []
+
+                retrieveCurrArgs ctxt' = retrieveTerm
+                    (CompoundT $ CompoundTerm f  bindedArgs)
+                    (CompoundT $ CompoundTerm f' (map (`bindTermVars` ctxt') as'))
+
+                -- combine the result of body goals and args
+                -- first arg of the function is body Ctxt
+                combineBodyArgs Nothing = Nothing
+                combineBodyArgs (Just (ctxt', res)) =
+                  case retrieveCurrArgs ctxt' of
+                    Just (argsCtxt, res') -> if res' && res
+                      then Just (argsCtxt, True)
+                      else Just ([], False)
+                    _ -> Nothing
               in case new_ctxt of
-                Nothing -> Just ([], False) : acc
-                Just new_ctxt' -> callClause prog new_ctxt' ++ acc
-            
-            AtomicT _ -> callClause prog ctxt ++ acc
+                Nothing -> Just (ctxt, False) : acc
+                Just new_ctxt' -> map ((`unifyCtxt` ctxt) . combineBodyArgs) (callClause prog new_ctxt') ++ acc
+
+            AtomicT _ -> map (`swapCtxt` ctxt) (callClause prog []) ++ acc
 
             _ -> acc
 
@@ -363,36 +406,83 @@ eval _ [] = return ()
 eval prog queries = mapM_ go queries
   where
     go :: GoalList -> IO ()
-    go query = case sequence $ evalOrQuery prog [] query of
-        Nothing -> putStrLn "ERROR."
-        Just res -> mapM_ (strRes >.> putStrLn) res -- (snd >.> strRes >.> putStrLn)
+    go query = case evalOrQuery prog [] query of
+        [] -> putStrLn "ERROR."
+        res -> do
+          printRes res
+          putStr "\n\n" -- (snd >.> printRes >.> putStrLn)
       where
-        strRes :: (Context, Bool) -> String
-        strRes (ctxt, True) = foldr (\(v, t) acc -> (varName v) ++ " = " ++ (show t) ++ "\n" ++ acc ) "" ctxt ++ "true."
-        strRes (_, False) = "false."
+        printRes :: [Maybe (Context, Bool)] -> IO ()
+        printRes [] = return()
+        printRes (res':rest) = do
+          putStr $ case res' of
+            Just (ctxt, True) -> if null ctxt
+              then "true."
+              else foldr (\(v, t) acc -> varName v ++ " = " ++ show t ++ (if not $ null acc then "\n" else "") ++ acc) "" ctxt
+            Just (_, False) -> "false."
+            _ -> "ERROR"
+          unless (null rest) waitForIn
+          where
+            waitForIn :: IO ()
+            waitForIn = do
+              hSetBuffering stdin NoBuffering
+              continue <- getChar
+              hSetBuffering stdin LineBuffering
+
+              putChar '\n'
+              if continue == ';'
+                then printRes rest
+                else unless (continue == '.') waitForIn
+
 
 evalOrQuery :: Program -> Context -> GoalList -> [Maybe (Context, Bool)] -- example why returns Context "true, (X=5;X=6), write(X)."
-evalOrQuery prog ctxt = foldr (evalAndQuery prog ctxt >.> (++)) []
+evalOrQuery prog ctxt = foldr (evalAndQuery prog ctxt >.> reduceFalse) []
+  where
+    reduceFalse :: [Maybe (Context, Bool)] -> [Maybe (Context, Bool)] -> [Maybe (Context, Bool)]
+    reduceFalse andRes acc = foldr (\x acc' -> case x of
+        Just (_, False) -> if null acc' then [x] else acc'
+        Just (_, True) -> x : acc'
+        Nothing -> [Nothing]
+      ) [] (andRes ++ acc)
 
 evalAndQuery :: Program -> Context -> [Goal] -> [ Maybe (Context, Bool)] -- NOTE: return [Bool] because of the OrQuery in EnclosedGoal
 evalAndQuery prog ctxt andQuery = case andQuery of -- foldr f Nothing andQuery
-  [] -> []
-  [goal] -> case evalGoal prog ctxt goal of
-      -- [] -> undefined
-      res -> res
-  (goal:gs) -> case evalGoal prog ctxt goal of
-      -- [] -> undefined
-      res -> foldr (\x acc -> case x of
+  [] -> [Just (ctxt, True)]
+
+  -- for each result of goal eval next goals
+  (goal:gs) -> foldr (\x acc -> case x of
           Just (ctxt', True) -> evalAndQuery prog ctxt' gs ++ acc
-          x' -> x':acc
-        ) [] res
+          Just (_, False) -> x:acc
+          _ -> [Nothing]
+        ) [] $ evalGoal prog ctxt goal
 
 evalGoal :: Program -> Context -> Goal -> [Maybe (Context, Bool)] -- NOTE: returns [] because of the OrQuery in EnclosedGoal
 evalGoal prog ctxt g = case g of -- NOTE: use ctxt because on andQuery "X = 5, goal(X)."/ "likes(X, ivanka), write(X)." goal(X) depend on the new bind for X
   ClauseGoal ch -> callTerm prog ctxt ch
   VarGoal v -> callTerm prog ctxt v
-  -- ExprGoal expr -> (:[]) <$> callTerm ctxt expr -- X is 5 / X = 5
   EnclosedGoal gl -> evalOrQuery prog ctxt gl
+
+
+
+  -- ExprGoal expr -> (:[]) <$> callTerm ctxt expr -- X is 5 / X = 5
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -425,8 +515,8 @@ notClause = PredefC (PredefClause { predefCH, callPredef })
 
     callPredef :: Program -> Context -> [Maybe (Context, Bool)]
     callPredef prog ctxt = case xVal of
-      Nothing -> [Nothing] `debug` show xVal
-      Just t -> map ((\(c, b) -> (c, not b)) <$>) $ call prog ctxt t 
+      Nothing -> [Nothing]
+      Just t -> map ((\(c, b) -> (c, not b)) <$>) $ call prog ctxt t
       where
         xVal = lookupVar x ctxt
 

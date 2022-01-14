@@ -64,45 +64,32 @@ woman(mia).
 % dasdasd
 % dasdasd
 jealous(X,Y):-  loves(X,Z),  loves(Y,Z).  
-
-% term(g(Y),g(g)) :- Y=gosh;Y=5;true.
-
-term(z,z).
-
-% dasdasd
-   d.
-% f :- d,d;d;d,z.
-z(b) :- true.
-g(Y).%Y = 5.
-% p(a(X), X) :- z(Y), X.
-
-% p(g(d,f),f) :- write("DA").
-
-% gen(0) :- gen(0).
-
-% p(z(), X) :- gen(0).
-
-gen(a(X, b, f(Y)), z) :- true, X.
-gen2(a(X, b, v), z).
-g(X, X) :- g(X).
-
-p(g(X)).
-z(5).
-% infiniteLoopTest(X) :- X < 5, X is X+1, infiniteLoopTest(X).
-
-% infiniteLoopTest :- infiniteLoopTest(0).
-
-% gen(a(d, b, f(Y)), z) :- true, X.
-pp(z).
-gg(X) :- pp(X).
-gg(X) :- gg(X).
-
+d.
 nn(ff()).
+ff().
 
-% true.
-% not(false).
-% false :- not(true).
+succ(one, two).
+succ(two, three).
+succ(three, four).
+succ(four, five).
+succ(five, six).
+succ(six, seven).
+eq(X, X).
+lt(X, Y) :- succ(X, Y).
+lt(X, Y) :- succ(X, Z), lt(Z, Y).
+lte(X, Y) :- eq(X, Y).
+lte(X, Y) :- lt(X, Y).
+gt(X, Y) :- lt(Y, X).
+gte(X, Y) :- lte(Y, X).
+range(X, Y, Z) :- lte(X, Y), lte(Y, Z).
 
-% dd :- false.
-dd :- false;true.
-z(X) :- X.
+test(a).
+test(a).
+test(b).
+test(a).
+
+pff :- test(X), test(Y), eq(X,Y).
+
+gen(X, Z) :- eq(X, Z); gen(s(X), Z).
+
+or(X,Y) :- X; not(X), Y.
