@@ -82,6 +82,11 @@ lte(X, Y) :- lt(X, Y).
 gt(X, Y) :- lt(Y, X).
 gte(X, Y) :- lte(Y, X).
 range(X, Y, Z) :- lte(X, Y), lte(Y, Z).
+% test: succ(X,Z),succ(Z, Y).
+% test: lte(X, three).
+% test: lt(X, four).
+% test: nn(ff). -> false
+% test: gen(X).
 
 test(a).
 test(a).
@@ -90,6 +95,18 @@ test(a).
 
 pff :- test(X), test(Y), eq(X,Y).
 
-gen(X, Z) :- eq(X, Z); gen(s(X), Z).
+gen(X) :- gen2(1, X).
+gen2(X, Z) :- eq(X, Z); gen2(s(X), Z).
 
 or(X,Y) :- X; not(X), Y.
+
+krr.
+krr :- true.
+
+brr(yo).
+brr(y).
+
+bff(y).
+dff(z).
+
+zff(X) :- bff(X), dff(X).

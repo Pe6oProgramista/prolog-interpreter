@@ -87,6 +87,8 @@ uniq (x:xs) = x : uniq (filter (/=x) xs)
 first :: forall a b c. (a -> b) -> (a, c) -> (b, c)
 first f (x, y) = (f x, y)
 
+second :: forall a b c. (b -> c) -> (a, b) -> (a, c)
+second f (x, y) = (x, f y)
 
 
 
