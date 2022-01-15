@@ -14,7 +14,7 @@ import Control.Monad ( Monad(return) )
 import Control.Applicative (Alternative(many))
 
 import Utils ( clauseEnd, initialInput, retrieveFileName, getLine', uniq )
-import Terms ( Program, eval, predefClauses )
+import Terms ( Program, eval, predefClauses, Info (EndInterpreter) )
 import Parser ( Parser(runParser), plQuery, plProgram, plEndInter )
 
 import Debug.Trace (trace)
@@ -47,26 +47,19 @@ plRun prog = go prog initialInput
       curr_input <- getLine'
       let input = last_input ++ curr_input
       
-      case runParser plEndInter input of
-        Just (_, prevIn) -> do
-          case runParser (many plQuery) prevIn of
-            Just (_, res) -> eval prog' res
-            Nothing -> putStrLn "Input parsing error"
-          
-          putStrLn "End!"
+      let x = runParser (many plQuery) input
+      case x of
+        Just (rest, res) -> do
+          evalRes <- eval prog' res
+          case evalRes of
+            EndInterpreter -> return ()
+            _ -> if clauseEnd `elem` rest
+              then do
+                putStrLn "Input parsing error"
+                go prog' initialInput
+              else go prog' rest
 
-        Nothing -> do
-          let x = runParser (many plQuery) input
-          case x of
-            Just (rest, res) -> do
-              eval prog' res
-              if clauseEnd `elem` rest
-                then do
-                  putStrLn "Input parsing error"
-                  go prog' initialInput
-                else go prog' rest
-
-            Nothing -> putStrLn "Input parsing error"
+        Nothing -> putStrLn "Input parsing error"
 
 
 

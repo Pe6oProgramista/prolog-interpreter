@@ -13,6 +13,7 @@ import Debug.Trace (trace)
 import Control.Monad (foldM_, when, unless)
 import System.IO (BufferMode(LineBuffering, NoBuffering), hSetBuffering, stdin)
 import Data.Foldable (asum)
+import Data.List (find)
 
 debug :: c -> String -> c
 debug = flip trace
@@ -52,12 +53,12 @@ debug = flip trace
 
 class Callable a where
   -- returns array because some terms may map to Rule that has GoalList with more than one andQuery
-  call :: Program -> Context -> a -> [Maybe (Context, Bool)]
+  call :: Program -> Context -> a -> [QueryRes]
 
 class IsTerm a where
   asTerm :: a -> Term
 
-  callTerm :: Program -> Context -> a -> [Maybe (Context, Bool)]
+  callTerm :: Program -> Context -> a -> [QueryRes]
   callTerm prog ctxt = call prog ctxt . asTerm
 
 
@@ -149,12 +150,18 @@ data Goal
 -- Query
 type GoalList = [[Goal]] -- map every list w/ Data.Monoid.All and the outer list is mapped w/ Data.Monoid.Any
 
-data Error = Error String | Cut | EndInterpreter 
-type QueryRes = Either Error (Context, Bool)
+data Info
+  = Error String
+  | Ok
+  | Cut (Context, [QueryRes])
+  | EndInterpreter 
+  deriving (Show, Eq)
+
+type QueryRes = Either Info (Context, Bool)
 
 data PredefClause = PredefClause {
     predefCH :: ClauseHead,
-    callPredef :: Program -> Context -> [Maybe (Context, Bool)] }
+    callPredef :: Program -> Context -> [QueryRes] }
 
 instance Show PredefClause where
   show (PredefClause h _) = show h
@@ -268,29 +275,29 @@ extendTerm_ extendVars (CompoundT ct1) (CompoundT ct2) ctxt = if length (args ct
   else Nothing
 
 
-swapCtxt :: Context -> Maybe (Context, Bool) -> Maybe (Context, Bool)
+swapCtxt :: Context -> QueryRes -> QueryRes
 swapCtxt ctxt res = (,) ctxt . snd <$> res
 
 unifyCtxt ::Context -> Context ->Context
 unifyCtxt c1 c2 = uniq (c1 ++ c2)
 
 instance Callable AtomicTerm where
-  call :: Program -> Context -> AtomicTerm -> [Maybe (Context, Bool)]
+  call :: Program -> Context -> AtomicTerm -> [QueryRes]
   call prog ctxt t = case t of
     ConstT _ -> case lookupClause (AtomicT t) prog of
-        [] -> [Nothing]
+        [] -> [Left $ Error "Missing clause"]
         clauses -> foldr (clauseRes >.> (++)) [] clauses
       where
         clauseRes clause = case clause of
-          Fact _ -> [Just (ctxt, True)]
+          Fact _ -> [Right (ctxt, True)]
           Rule _ gl -> map (swapCtxt ctxt) (evalOrQuery prog [] gl)
           PredefC (PredefClause _ callClause) -> map (swapCtxt ctxt) (callClause prog []) -- swaping because this is clause without arguments and we dont want its context
 
-    IntT _ -> [Nothing]
-    FloatT _ -> [Nothing]
+    IntT _ -> [Left $ Error "Numbers are not callable"]
+    FloatT _ -> [Left $ Error "Numbers are not callable"]
 
 instance Callable CompoundTerm where
-  call :: Program -> Context -> CompoundTerm -> [Maybe (Context, Bool)]
+  call :: Program -> Context -> CompoundTerm -> [QueryRes]
   call prog ctxt CompoundTerm {functor = f1, args = args1} =
     let
       boundArgs1 = map (`bindTermVars` ctxt) args1
@@ -309,16 +316,16 @@ instance Callable CompoundTerm where
       -- combine the result of body goals and args
       -- first arg of the function is body Ctxt
       bodyToArgs f2 args2 bodyRes = case bodyRes of
-          Nothing -> Nothing
-          (Just (ctxt', res)) ->
+          (Right (ctxt', res)) ->
             case (newCtxtFrom f2 boundArgs2, res) of
-              (Just argsCtxt, True) -> Just (unifyCtxt argsCtxt ctxt, True)
-              _ -> Just (ctxt, False) -- "ctxt = unifyCtxt [] ctxt"     maybe it wiil return Nothing if args are different count but we handle this from lookup for clauses
+              (Just argsCtxt, True) -> Right (unifyCtxt argsCtxt ctxt, True)
+              _ -> Right (ctxt, False) -- "ctxt = unifyCtxt [] ctxt"     maybe it wiil return Nothing if args are different count but we handle this from lookup for clauses
             where
               boundArgs2 = map (`bindTermVars` ctxt') args2
+          left -> left
 
     in case lookupClause (CompoundT $ CompoundTerm f1 args1) prog of
-      [] -> [Nothing]
+      [] -> [Left $ Error "Missing clause"]
       clauses -> foldr (clauseRes >.> (++)) [] clauses
         where
           clauseRes clause = case clause of
@@ -326,13 +333,13 @@ instance Callable CompoundTerm where
             Fact ch -> case asTerm ch of
               CompoundT CompoundTerm {functor = f2, args = args2} ->
                 case newCtxtFor f2 args2 of
-                  Nothing -> [Just (ctxt, False)]
+                  Nothing -> [Right (ctxt, False)]
                   Just new_ctxt' -> case newCtxtFrom f2 (map (`bindTermVars` new_ctxt') args2) of
-                    Just new_ctxt'' -> [Just (new_ctxt'', True)]
-                    Nothing -> [Just (ctxt, False)]
+                    Just new_ctxt'' -> [Right (new_ctxt'', True)]
+                    Nothing -> [Right (ctxt, False)]
 
               -- case for zero arguments CompoundTerm
-              AtomicT _ -> [Just (ctxt, True)]
+              AtomicT _ -> [Right (ctxt, True)]
 
               _ -> [] -- maybe it will never reach this line (if lookup works properly)
 
@@ -340,7 +347,7 @@ instance Callable CompoundTerm where
             Rule ch gl -> case asTerm ch of
               CompoundT CompoundTerm {functor = f2, args = args2} ->
                 case newCtxtFor f2 args2 of
-                  Nothing -> [Just (ctxt, False)]
+                  Nothing -> [Right (ctxt, False)]
                   Just new_ctxt' -> map (bodyToArgs f2 args2) (evalOrQuery prog new_ctxt' gl)
 
               -- case for zero arguments CompoundTerm
@@ -351,7 +358,7 @@ instance Callable CompoundTerm where
             PredefC (PredefClause ch callClause) -> case asTerm ch of
               CompoundT CompoundTerm {functor = f2, args = args2} ->
                 case newCtxtFor f2 args2 of
-                  Nothing -> [Just (ctxt, False)]
+                  Nothing -> [Right (ctxt, False)]
                   Just new_ctxt' -> map (bodyToArgs f2 args2) (callClause prog new_ctxt')
 
               AtomicT _ -> map (swapCtxt ctxt) (callClause prog [])
@@ -364,67 +371,83 @@ instance Callable Term where
     CompoundT ct -> call prog ctxt ct
     VarT var -> case lookupVar var ctxt of
       Just term -> call prog (filter (fst >.> (/= var)) ctxt) term
-      Nothing -> [Nothing] -- NOTE: not sure if error should be [] or [..Nothing]
+      Nothing -> [Left $ Error "Variables are not callable"] -- NOTE: not sure if error should be [] or [..Nothing]
 
 
 
 -- [ "true,false ; true" , "false, false" ]
-eval :: Program -> [GoalList] -> IO ()
-eval _ [] = return ()
-eval prog queries = mapM_ go queries
+eval :: Program -> [GoalList] -> IO Info
+eval _ [] = return Ok
+eval prog queries = fromMaybe Ok . find (== EndInterpreter) <$> mapM go queries
   where
-    go :: GoalList -> IO ()
+    go :: GoalList -> IO Info
     go query = case evalOrQuery prog [] query of
-        [] -> putStrLn "ERROR."
+        [] -> putStrLn "You try to execute empty query" >> return Ok
         res -> do
-          printRes res
-          putStr "\n\n"
+          res' <- printRes res
+          putStr "\n"
+          return res'
       where
-        printRes :: [Maybe (Context, Bool)] -> IO ()
-        printRes [] = putChar '.' -- return ()
+        printRes :: [QueryRes] -> IO Info
+        printRes [] = do
+          putChar '.'
+          return Ok
         printRes (res':rest) = do
-          putStr $ case res' of
-            Just (ctxt, True) -> if null ctxt
-              then "true "
-              else foldr (\(v, t) acc -> varName v ++ " = " ++ show t ++ (if not $ null acc then " \n" else " ") ++ acc) "" ctxt
-            Just (_, False) -> "false "
-            _ -> "ERROR"
-          unless (null rest) $ waitForIn rest
+          retVal <- case res' of
+            Right (ctxt, True) -> if null ctxt
+              then putStr "true " >> return Ok
+              else putStr (foldr (\(v, t) acc -> varName v ++ " = " ++ show t ++ (if not $ null acc then " \n" else " ") ++ acc) "" ctxt) >> return Ok
+            Right (_, False) -> putStr "false " >> return Ok
+            Left (Error msg) -> putStr msg >> return Ok
+            Left Ok -> return Ok
+            Left (Cut ctxt) -> return (Cut ctxt)
+            Left EndInterpreter -> return EndInterpreter -- not working because have to be connected with Lib.hs
           
-        waitForIn :: [Maybe (Context, Bool)] -> IO ()
+          case retVal of
+            EndInterpreter -> return EndInterpreter
+            val -> if null rest
+              then return val
+              else waitForIn rest
+          
+          
+        waitForIn :: [QueryRes] -> IO Info
         waitForIn rest = do
           hSetBuffering stdin NoBuffering
           continue <- getChar
           hSetBuffering stdin LineBuffering
 
           putChar '\n'
-          if continue == ';'
-            then printRes rest
-            else unless (continue == '.') $ waitForIn rest
+          if continue == ';' then
+            printRes rest
+          else if continue == '.' then
+            return Ok
+          else waitForIn rest
 
 
-evalOrQuery :: Program -> Context -> GoalList -> [Maybe (Context, Bool)] -- example why returns Context "true, (X=5;X=6), write(X)."
+evalOrQuery :: Program -> Context -> GoalList -> [QueryRes] -- example why returns Context "true, (X=5;X=6), write(X)."
 evalOrQuery prog ctxt = foldr (evalAndQuery prog ctxt >.> reduceFalse) []
   where
-    reduceFalse :: [Maybe (Context, Bool)] -> [Maybe (Context, Bool)] -> [Maybe (Context, Bool)]
+    reduceFalse :: [QueryRes] -> [QueryRes] -> [QueryRes]
     reduceFalse andRes acc = foldr (\x acc' -> case x of
-        Just (_, False) -> if null acc' then [x] else acc'
-        Just (_, True) -> x : acc'
-        Nothing -> [Nothing]
+        Right (_, False) -> if null acc' then [x] else acc'
+        Right (_, True) -> x : acc'
+        Left (Cut (_, nextRes)) -> reduceFalse nextRes []
+        left -> [left]
       ) [] (andRes ++ acc)
 
-evalAndQuery :: Program -> Context -> [Goal] -> [ Maybe (Context, Bool)] -- NOTE: return [Bool] because of the OrQuery in EnclosedGoal
+evalAndQuery :: Program -> Context -> [Goal] -> [QueryRes] -- NOTE: return [Bool] because of the OrQuery in EnclosedGoal
 evalAndQuery prog ctxt andQuery = case andQuery of -- foldr f Nothing andQuery
-  [] -> [Just (ctxt, True)]
+  [] -> [Right (ctxt, True)]
 
   -- for each result of goal eval next goals
   (goal:gs) -> foldr (\x acc -> case x of
-          Just (ctxt', True) -> evalAndQuery prog ctxt' gs ++ acc
-          Just (_, False) -> x:acc
-          _ -> [Nothing]
-        ) [] $ evalGoal prog ctxt goal
+      Right (ctxt', True) -> evalAndQuery prog ctxt' gs ++ acc
+      Right (_, False) -> x:acc
+      Left (Cut (ctxt', [])) -> [ Left $ Cut (ctxt', evalAndQuery prog ctxt' gs) ]
+      left -> [left]
+    ) [] $ evalGoal prog ctxt goal
 
-evalGoal :: Program -> Context -> Goal -> [Maybe (Context, Bool)] -- NOTE: returns [] because of the OrQuery in EnclosedGoal
+evalGoal :: Program -> Context -> Goal -> [QueryRes] -- NOTE: returns [] because of the OrQuery in EnclosedGoal
 evalGoal prog ctxt g = case g of -- NOTE: use ctxt because on andQuery "X = 5, goal(X)."/ "likes(X, ivanka), write(X)." goal(X) depend on the new bind for X
   ClauseGoal ch -> callTerm prog ctxt ch
   VarGoal v -> callTerm prog ctxt v
@@ -442,8 +465,8 @@ trueClause = PredefC (PredefClause { predefCH, callPredef })
     predefCH :: ClauseHead
     predefCH = ConstHead (Id "true")
 
-    callPredef :: Program -> Context -> [Maybe (Context, Bool)]
-    callPredef _ ctxt = [Just (ctxt, True)]
+    callPredef :: Program -> Context -> [QueryRes]
+    callPredef _ ctxt = [Right (ctxt, True)]
 
 falseClause :: Clause
 falseClause = PredefC (PredefClause { predefCH, callPredef })
@@ -451,8 +474,8 @@ falseClause = PredefC (PredefClause { predefCH, callPredef })
     predefCH :: ClauseHead
     predefCH = ConstHead (Id "false")
 
-    callPredef :: Program -> Context -> [Maybe (Context, Bool)]
-    callPredef _ _ = [Just ([], False)]
+    callPredef :: Program -> Context -> [QueryRes]
+    callPredef _ _ = [Right ([], False)]
 
 notClause :: Clause
 notClause = PredefC (PredefClause { predefCH, callPredef })
@@ -462,15 +485,35 @@ notClause = PredefC (PredefClause { predefCH, callPredef })
     predefCH :: ClauseHead
     predefCH = CompoundHead $ CompoundTerm { functor = Id "not", args = [asTerm x] }
 
-    callPredef :: Program -> Context -> [Maybe (Context, Bool)]
+    callPredef :: Program -> Context -> [QueryRes]
     callPredef prog ctxt = case xVal of
-      Nothing -> [Nothing]
+      Nothing -> [Left $ Error "Missing clause"]
       Just t -> map (second not <$>) $ call prog ctxt t
       where
         xVal = lookupVar x ctxt
 
+-- ! - if all before cut are true it execute rest and stop
+--   - if all before cut are false the cut is not called and continue
+cutClause :: Clause
+cutClause = PredefC (PredefClause { predefCH, callPredef })
+  where
+    predefCH :: ClauseHead
+    predefCH = ConstHead $ Id "!"
+
+    callPredef :: Program -> Context -> [QueryRes]
+    callPredef _ ctxt = [Left $ Cut (ctxt, [])]
+
+haltClause :: Clause
+haltClause = PredefC (PredefClause { predefCH, callPredef })
+  where
+    predefCH :: ClauseHead
+    predefCH = ConstHead (Id "halt")
+
+    callPredef :: Program -> Context -> [QueryRes]
+    callPredef _ _ = [Left EndInterpreter]
+
 predefClauses :: [Clause]
-predefClauses = [trueClause, falseClause, notClause]
+predefClauses = [trueClause, falseClause, notClause, cutClause, haltClause]
 
 
 

@@ -110,3 +110,33 @@ bff(y).
 dff(z).
 
 zff(X) :- bff(X), dff(X).
+
+
+% proud(X) :- parent(X, Y), newborn(Y).
+% parent(X,Y) :- father(X, Y).
+% parent(X,Y) :- mother(X, Y).
+% father(adam, mary).
+% mother(eva, mary).
+% newborn(mary).
+
+parent(F,C) :- father(F,C).
+parent(X,Y) :- mother(X,Y).
+father(adam,mary).
+mother(sara,mimi).
+newborn(mary).
+proud(X) :- parent(X,Y), newborn(Y).
+
+
+gen3(X, Z) :- eq(X, Z).
+gen3(X, Z) :- gen3(s(X), s(Z)).
+
+% f(X) :- eq(one, two).
+% testt(X) :- eq(f(X), f(X)).
+
+f(X) :- eq(one, two).
+testt(X) :- eq(f(X), X).
+
+t(X).
+p(X, Y) :- eq(X, t(Y)), eq(t(X), Y).
+
+tt :- true,!,(true;true;false);true;true;true;true.

@@ -185,12 +185,17 @@ plClauseGoal = ClauseGoal <$> plClauseHead
 plVarGoal :: Parser Goal
 plVarGoal = VarGoal <$> plVar
 
-
 plEnclosedGoal :: Parser Goal
 plEnclosedGoal = EnclosedGoal <$> (charP '(' *> comOrWs *> plGoalList <* comOrWs <* charP ')');
 
+plEndInter :: Parser String
+plEndInter = satisfyManyP (/= 'h') *> stringP "halt."
+
+plCut :: Parser Goal
+plCut = ClauseGoal . ConstHead . Id <$> (comOrWs *> stringP "!")
+
 plGoal :: Parser Goal
-plGoal = asum [plClauseGoal, plVarGoal, plEnclosedGoal]
+plGoal = asum [plClauseGoal, plVarGoal, plEnclosedGoal, plCut]
 
 -- TODO: test with splitManyByP and splitSomeByP
 plGoalList :: Parser GoalList
@@ -216,6 +221,3 @@ plClause = asum [plFact, plRule]
 plProgram :: Parser Program
 -- plProgram = wholeInP $ ws *> splitManyByP plClause (ws <|> (ws *> plComment *> ws)) <* ws
 plProgram = wholeInP $ comOrWs *> splitManyByP plClause comOrWs <* comOrWs
-
-plEndInter :: Parser String
-plEndInter = satisfyManyP (/= 'h') <* stringP "halt."
