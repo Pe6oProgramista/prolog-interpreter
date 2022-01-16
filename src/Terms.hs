@@ -150,10 +150,16 @@ data Goal
 -- Query
 type GoalList = [[Goal]] -- map every list w/ Data.Monoid.All and the outer list is mapped w/ Data.Monoid.Any
 
+-- data Query =  | FileLoader { fileName :: String }
+
+data FileGoalData = NextCtxt Context | NextRes [QueryRes] | NextProgram Program 
+  deriving (Show, Eq)
+
 data Info
   = Error String
   | Ok
   | Cut (Context, [QueryRes])
+  | LoadFile { fileName :: String, fileGoalData :: FileGoalData }
   | EndInterpreter 
   deriving (Show, Eq)
 
@@ -375,10 +381,39 @@ instance Callable Term where
 
 
 
+-- NOTE: backspace and arrows dont work in interpreter
+--       compile the project and run the executable to delete and move through stdin
+plReadFile :: String -> IO (Maybe Program) 
+plReadFile fileName = do
+  fileData <- readFile $ retrieveFileName fileName
+
+  case runParser plProgram fileData of
+    Just (_rest, res) -> Just res
+    Nothing -> do
+      
+      Nothing
+
+  -- return ()
+
 -- [ "true,false ; true" , "false, false" ]
 eval :: Program -> [GoalList] -> IO Info
 eval _ [] = return Ok
-eval prog queries = fromMaybe Ok . find (== EndInterpreter) <$> mapM go queries
+eval prog (q:queries) = do
+  res <- go q
+  case res of
+    LoadFile fileName _ -> do
+      newProg <- plReadFile fileName
+      case newProg of
+        Just prog' -> eval (prog++prog') queries
+        Nothing -> do
+          putStrLn "File parsing error"
+          eval prog queries
+
+    LoadFile _ (NextProgram prog') -> eval (prog++prog') queries -- if new program is loaded before that step for some reason
+    EndInterpreter -> return EndInterpreter
+    _ -> eval prog queries
+
+-- eval prog queries = fromMaybe Ok . find (== EndInterpreter) <$> mapM go queries
   where
     go :: GoalList -> IO Info
     go query = case evalOrQuery prog [] query of
@@ -401,6 +436,7 @@ eval prog queries = fromMaybe Ok . find (== EndInterpreter) <$> mapM go queries
             Left (Error msg) -> putStr msg >> return Ok
             Left Ok -> return Ok
             Left (Cut ctxt) -> return (Cut ctxt)
+            Left (LoadFile filename lastRes) -> _
             Left EndInterpreter -> return EndInterpreter -- not working because have to be connected with Lib.hs
           
           case retVal of
@@ -425,37 +461,42 @@ eval prog queries = fromMaybe Ok . find (== EndInterpreter) <$> mapM go queries
 
 
 evalOrQuery :: Program -> Context -> GoalList -> [QueryRes] -- example why returns Context "true, (X=5;X=6), write(X)."
-evalOrQuery prog ctxt = foldr (evalAndQuery prog ctxt >.> reduceFalse) []
+evalOrQuery prog ctxt = foldr (evalAndQuery prog ctxt >.> filterRes) []
   where
-    reduceFalse :: [QueryRes] -> [QueryRes] -> [QueryRes]
-    reduceFalse andRes acc = foldr (\x acc' -> case x of
+    -- reduce False values 
+    filterRes :: [QueryRes] -> [QueryRes] -> [QueryRes]
+    filterRes andRes acc = foldr (\x acc' -> case x of
         Right (_, False) -> if null acc' then [x] else acc'
         Right (_, True) -> x : acc'
-        Left (Cut (_, nextRes)) -> reduceFalse nextRes []
+        Left (Cut (_, nextRes)) -> filterRes nextRes []
+        Left (LoadFile filename (Right nextRes)) -> [ Left $ LoadFile filename (Right $ filterRes nextRes [] ++ acc') ]
         left -> [left]
       ) [] (andRes ++ acc)
 
+-- NOTE: vrushtame Either zashtot ako sme v encloused goal i v nego zarejdame file shte minem prez and query koeto shte vurne LoadFile pri koeto shte doidem tuk s LoadFile i s rezultat za ostanalite neshta v skobite i 
 evalAndQuery :: Program -> Context -> [Goal] -> [QueryRes] -- NOTE: return [Bool] because of the OrQuery in EnclosedGoal
 evalAndQuery prog ctxt andQuery = case andQuery of -- foldr f Nothing andQuery
   [] -> [Right (ctxt, True)]
 
   -- for each result of goal eval next goals
-  (goal:gs) -> foldr (\x acc -> case x of
-      Right (ctxt', True) -> evalAndQuery prog ctxt' gs ++ acc
-      Right (_, False) -> x:acc
-      Left (Cut (ctxt', [])) -> [ Left $ Cut (ctxt', evalAndQuery prog ctxt' gs) ]
-      left -> [left]
-    ) [] $ evalGoal prog ctxt goal
+  (goal:gs) -> helper (evalGoal prog ctxt goal) 
+    where
+      helper goalRes = foldr (\x acc -> case x of
+        Right (ctxt', True) -> evalAndQuery prog ctxt' gs ++ acc
+        Right (_, False) -> x:acc
+        Left (Cut (ctxt', [])) -> [ Left $ Cut (ctxt', evalAndQuery prog ctxt' gs) ] -- NOTE: if we have cut with not empty results that means it was already evaluated for some reason
+        Left (LoadFile filename (Left lastCtxt)) -> [ Left $ LoadFile filename (Right $ evalAndQuery prog lastCtxt gs ++ acc) ]
+        Left (LoadFile filename (Right lastRes)) -> [ Left $ LoadFile filename (Right $ helper lastRes ++ acc) ]
+        left -> [left] ) [] goalRes
 
 evalGoal :: Program -> Context -> Goal -> [QueryRes] -- NOTE: returns [] because of the OrQuery in EnclosedGoal
 evalGoal prog ctxt g = case g of -- NOTE: use ctxt because on andQuery "X = 5, goal(X)."/ "likes(X, ivanka), write(X)." goal(X) depend on the new bind for X
   ClauseGoal ch -> callTerm prog ctxt ch
   VarGoal v -> callTerm prog ctxt v
   EnclosedGoal gl -> evalOrQuery prog ctxt gl
-
-
-
+  -- FileLoader filename -> [ Left $ LoadFile filename (Left ctxt) ]
   -- ExprGoal expr -> (:[]) <$> callTerm ctxt expr -- X is 5 / X = 5
+
 
 
 -- Predefined clauses

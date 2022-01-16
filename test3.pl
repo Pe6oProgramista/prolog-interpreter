@@ -140,3 +140,7 @@ t(X).
 p(X, Y) :- eq(X, t(Y)), eq(t(X), Y).
 
 tt :- true,!,(true;true;false);true;true;true;true.
+
+% bam(X).
+
+bam(f).

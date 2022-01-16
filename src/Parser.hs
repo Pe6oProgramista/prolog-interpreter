@@ -188,31 +188,40 @@ plVarGoal = VarGoal <$> plVar
 plEnclosedGoal :: Parser Goal
 plEnclosedGoal = EnclosedGoal <$> (charP '(' *> comOrWs *> plGoalList <* comOrWs <* charP ')');
 
-plEndInter :: Parser String
-plEndInter = satisfyManyP (/= 'h') *> stringP "halt."
+-- plEndInter :: Parser String
+-- plEndInter = satisfyManyP (/= 'h') *> stringP "halt."
 
 plCut :: Parser Goal
-plCut = ClauseGoal . ConstHead . Id <$> (comOrWs *> stringP "!")
+plCut = ClauseGoal . ConstHead . Id <$> stringP "!"
 
 plGoal :: Parser Goal
 plGoal = asum [plClauseGoal, plVarGoal, plEnclosedGoal, plCut]
 
 -- TODO: test with splitManyByP and splitSomeByP
 plGoalList :: Parser GoalList
-plGoalList = splitManyByP andGoalP (comOrWs *> charP ';' <* comOrWs)
+plGoalList = splitManyByP plAndGoals (comOrWs *> charP ';' <* comOrWs)
   where
-    andGoalP = splitSomeByP plGoal (comOrWs *> charP ',' <* comOrWs)
+    plAndGoals :: Parser [Goal]
+plAndGoals = splitSomeByP plGoal (comOrWs *> charP ',' <* comOrWs)
 
 -- Query
+plBodyQuery :: Parser GoalList
+plBodyQuery = comOrWs *> plGoalList <* comOrWs <* charP clauseEnd
+
+-- TODO
+plFilesQuery :: Parser GoalList
+plFilesQuery = ClauseGoal . ConstHead . Id <$> (charP '[' *> comOrWs *> satisfyManyP (notp (isSpace .||. isLn) .&&. (/= ']')) <* charP ']')
+
 plQuery :: Parser GoalList
-plQuery = comOrWs *> plGoalList <* comOrWs <* charP clauseEnd
+plQuery = plBodyQuery <|> plFilesQuery
 
 -- Clause
 plFact :: Parser Clause
 plFact = Fact <$> plClauseHead <* comOrWs <* charP clauseEnd
 
 plRule :: Parser Clause
-plRule = Rule <$> plClauseHead <* comOrWs <* stringP ":-" <*> plQuery
+plRule = Rule <$> plClauseHead <* comOrWs <* stringP ":-" <*> plBodyQuery
+
 
 plClause :: Parser Clause
 plClause = asum [plFact, plRule]
